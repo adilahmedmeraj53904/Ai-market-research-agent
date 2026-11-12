@@ -1,0 +1,442 @@
+{
+  "name": "Market research",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Researcher Form",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Research Topic",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Catagory",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "What is your Country",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Language?"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        0
+      ],
+      "id": "72291e66-0794-42ba-9a47-387e06789c7d",
+      "name": "On form submission",
+      "webhookId": "3345bd1d-b5d3-4714-986b-b18f64042193"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6144059c-b2bf-43df-a06b-d130391b71c6",
+              "name": "Research Topic",
+              "value": "={{ $json['Research Topic'] }}",
+              "type": "string"
+            },
+            {
+              "id": "ef5b467f-ec5d-45df-a591-9c4016a6a229",
+              "name": "Catagory",
+              "value": "={{ $json.Catagory }}",
+              "type": "string"
+            },
+            {
+              "id": "0853ea83-821c-4bee-b29f-7f468a315781",
+              "name": "What is your Country",
+              "value": "={{ $json['What is your Country'] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        192,
+        0
+      ],
+      "id": "13abe8e7-e56b-4ed9-86c5-d4eb460f5469",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        864,
+        0
+      ],
+      "id": "9a2c5c5b-f34d-405b-bdd0-db5c828b9f4f",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// =========================================\n// SERPAPI GOOGLE MAPS DATA TRANSFORMATION\n// Dynamic Research | Maximum 4 Businesses\n// =========================================\n\n// 1. Read SerpApi response\nconst input = $input.all();\n\n// 2. Get dynamic form information\nconst form = $(\"Edit Fields\").first().json;\n\nconst researchTopic = form[\"Research Topic\"] || \"\";\nconst category = form[\"Catagory\"] || \"\";\nconst country = form[\"What is your Country\"] || \"\";\n\n// 3. Settings\nconst MAX_BUSINESSES = 4;\n\n// 4. Helper functions\nfunction cleanText(value) {\n  if (value === undefined || value === null) {\n    return null;\n  }\n\n  const text = String(value)\n    .replace(/\\s+/g, \" \")\n    .trim();\n\n  return text || null;\n}\n\nfunction cleanNumber(value) {\n  if (value === null || value === undefined || value === \"\") {\n    return null;\n  }\n\n  const number = Number(value);\n\n  return Number.isFinite(number) ? number : null;\n}\n\n// 5. Extract business results from SerpApi\nconst allBusinesses = [];\n\nfor (const item of input) {\n  const data = item.json;\n\n  if (Array.isArray(data.local_results)) {\n    allBusinesses.push(...data.local_results);\n  }\n\n  if (data.place_results) {\n    allBusinesses.push(data.place_results);\n  }\n}\n\n// 6. Remove duplicate businesses\nconst uniqueBusinesses = [];\nconst seen = new Set();\n\nfor (const business of allBusinesses) {\n  const name = cleanText(business.title);\n\n  if (!name) continue;\n\n  const key = business.place_id ||\n    business.data_id ||\n    `${name.toLowerCase()}|${business.address || \"\"}`;\n\n  if (seen.has(key)) continue;\n\n  seen.add(key);\n  uniqueBusinesses.push(business);\n}\n\n// 7. Select first 4 search results\nconst selectedBusinesses = uniqueBusinesses.slice(\n  0,\n  MAX_BUSINESSES\n);\n\n// 8. Transform every business into a separate item\nconst output = selectedBusinesses.map((business, index) => {\n\n  return {\n    json: {\n\n      // Research context\n      research_context: {\n        research_topic: researchTopic,\n        business_category: category,\n        country: country\n      },\n\n      // Business identification\n      rank: index + 1,\n\n      business_name: cleanText(business.title),\n\n      business_type: cleanText(business.type),\n\n      business_types: Array.isArray(business.types)\n        ? business.types\n        : [],\n\n      // Location\n      address: cleanText(business.address),\n\n      location: {\n        latitude: cleanNumber(\n          business.gps_coordinates?.latitude\n        ),\n\n        longitude: cleanNumber(\n          business.gps_coordinates?.longitude\n        )\n      },\n\n      // Contact\n      phone: cleanText(\n        business.phone || business.links?.phone\n      ),\n\n      website: cleanText(\n        business.website || business.links?.website\n      ),\n\n      // Ratings\n      google_overall_rating: cleanNumber(\n        business.rating\n      ),\n\n      google_total_review_count: cleanNumber(\n        business.reviews\n      ),\n\n      // SerpApi identifiers\n      place_id: business.place_id || null,\n\n      data_id: business.data_id || null,\n\n      reviews_link: business.reviews_link || null,\n\n      place_id_search: business.place_id_search || null,\n\n      // Extra information\n      description: cleanText(business.description),\n\n      price: cleanText(business.price),\n\n      operating_hours:\n        business.operating_hours ||\n        business.hours ||\n        null,\n\n      // Source\n      data_source: \"SerpApi Google Maps\",\n\n      data_status: \"Collected\"\n    }\n  };\n});\n\n// 9. Handle missing results\nif (output.length === 0) {\n  return [{\n    json: {\n      data_status: \"No businesses found\",\n      business_count: 0,\n      research_context: {\n        research_topic: researchTopic,\n        business_category: category,\n        country: country\n      },\n      error: \"SerpApi returned no local_results\"\n    }\n  }];\n}\n\n// 10. Return transformed businesses\nreturn output;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        0
+      ],
+      "id": "46672ef4-8baa-4d27-8e3f-54b822311016",
+      "name": "Rearrange data"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.reviews_link }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1088,
+        96
+      ],
+      "id": "01c4d132-f1fb-4b86-91b9-1ce60be246c1",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "jhoVtorAB32DS8GR",
+          "name": "Query Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        1088,
+        -96
+      ],
+      "id": "4b523482-dcd8-4470-80cf-8934e3d048da",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==========================================\n// N8N MARKET RESEARCH\n// PREPARE DATA FOR AI AGENT\n// ==========================================\n\nconst MAX_BUSINESSES = 4;\nconst MAX_REVIEWS = 5;\n\n// 1. Get dynamic form values\nconst form = $(\"Edit Fields\").first().json;\n\nconst researchContext = {\n  research_topic: form[\"Research Topic\"] || \"\",\n  business_category:\n    form[\"Catagory\"] || form[\"Category\"] || \"\",\n  country: form[\"What is your Country\"] || \"\"\n};\n\n// 2. Read Aggregate data\nconst inputItems = $input.all();\n\nconst records = inputItems.flatMap(item => {\n  const data = item.json;\n\n  if (Array.isArray(data.data)) {\n    return data.data;\n  }\n\n  if (Array.isArray(data.items)) {\n    return data.items;\n  }\n\n  return [data];\n});\n\n// 3. Normalize all businesses\nconst businesses = records\n  .map((record, index) => {\n\n    const data = record.json || record;\n\n    const original =\n      data.original_business ||\n      data.business ||\n      data;\n\n    const serpapi = data.serpapi_result || {};\n\n    const reviewsRaw =\n      original.customer_reviews ||\n      data.customer_reviews ||\n      data.reviews ||\n      [];\n\n    const reviews = Array.isArray(reviewsRaw)\n      ? reviewsRaw.slice(0, MAX_REVIEWS).map(review => ({\n          rating:\n            review.rating ??\n            review.stars ??\n            null,\n\n          text: String(\n            review.text ||\n            review.snippet ||\n            review.review ||\n            \"\"\n          ).slice(0, 300),\n\n          date:\n            review.date ||\n            review.iso_date ||\n            null\n        }))\n      : [];\n\n    const name =\n      original.business_name ||\n      original.title ||\n      serpapi.business_name ||\n      \"\";\n\n    const validation = data.validation || {};\n\n    return {\n      rank: index + 1,\n\n      business_name: name,\n\n      business_type:\n        original.business_type ||\n        serpapi.business_type ||\n        \"\",\n\n      address:\n        original.address ||\n        serpapi.address ||\n        \"\",\n\n      phone:\n        original.phone ||\n        serpapi.phone ||\n        \"\",\n\n      website:\n        original.website ||\n        serpapi.website ||\n        \"\",\n\n      google_rating:\n        original.google_overall_rating ??\n        original.rating ??\n        serpapi.rating ??\n        null,\n\n      total_google_reviews:\n        original.google_total_review_count ??\n        original.reviews_count ??\n        serpapi.reviews_count ??\n        null,\n\n      google_maps_url:\n        original.google_maps_url ||\n        serpapi.google_maps_url ||\n        \"\",\n\n      place_id:\n        original.place_id ||\n        serpapi.place_id ||\n        \"\",\n\n      validation_status:\n        validation.is_valid === true\n          ? \"verified\"\n          : \"unverified\",\n\n      validation_reason:\n        validation.reason || \"\",\n\n      reviews_sampled: reviews.length,\n\n      customer_reviews: reviews\n    };\n  })\n\n  // Remove only records without a business name\n  .filter(business => business.business_name)\n\n  // Keep maximum 4 businesses\n  .slice(0, MAX_BUSINESSES);\n\n// 4. Calculate statistics\nconst ratings = businesses\n  .map(business => Number(business.google_rating))\n  .filter(rating => Number.isFinite(rating) && rating > 0);\n\nconst averageRating = ratings.length\n  ? Number(\n      (\n        ratings.reduce((sum, rating) => sum + rating, 0)\n        / ratings.length\n      ).toFixed(2)\n    )\n  : null;\n\nconst totalReviewsSampled = businesses.reduce(\n  (sum, business) => sum + business.reviews_sampled,\n  0\n);\n\n// 5. Prepare AI analysis object\nconst aiData = {\n\n  research_context: researchContext,\n\n  analysis_type:\n    \"Professional Local Business Market Research\",\n\n  statistics: {\n    businesses_found: businesses.length,\n    reviews_sampled: totalReviewsSampled,\n    average_google_rating: averageRating\n  },\n\n  businesses: businesses,\n\n  analysis_instructions: [\n    \"Analyze each business separately.\",\n    \"Compare strengths and weaknesses.\",\n    \"Identify customer satisfaction patterns.\",\n    \"Identify common complaints from available reviews.\",\n    \"Evaluate competitive positioning.\",\n    \"Suggest business improvement opportunities.\",\n    \"Provide a professional executive summary.\",\n    \"Provide actionable recommendations.\",\n    \"Clearly distinguish observed facts from interpretations.\",\n    \"Do not invent missing information.\",\n    \"Treat unverified listings as unverified.\"\n  ],\n\n  limitations: [\n    \"Google Maps ratings and review counts may change.\",\n    \"Sampled reviews may not represent all customers.\",\n    \"Business details may require independent verification.\"\n  ]\n};\n\n// 6. Return output for AI Agent\nreturn [\n  {\n    json: {\n\n      research_topic:\n        researchContext.research_topic,\n\n      business_category:\n        researchContext.business_category,\n\n      country:\n        researchContext.country,\n\n      business_count:\n        businesses.length,\n\n      total_reviews_sampled:\n        totalReviewsSampled,\n\n      average_rating:\n        averageRating,\n\n      businesses:\n        businesses,\n\n      ai_input:\n        JSON.stringify(aiData),\n\n      generated_at:\n        new Date().toISOString(),\n\n      data_status:\n        businesses.length > 0\n          ? \"Ready for AI Analysis\"\n          : \"No business records found\",\n\n      diagnostic:\n        businesses.length === 0\n          ? {\n              records_received: records.length,\n              first_record: records[0] || null\n            }\n          : null\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        -96
+      ],
+      "id": "e4b21eb9-a302-4348-80a9-8fa5a2f96dc0",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// ===========================================\n// SERPAPI BUSINESS VALIDATION & CLASSIFICATION\n// n8n Code Node\n// Mode: Run Once for Each Item\n// ===========================================\n\n// 1. Data from SerpApi\nconst response = $json;\n\n// 2. Original business from Loop Over Items\nconst original = $(\"Loop Over Items\").item.json;\n\n// 3. Helper functions\nfunction clean(value) {\n  if (value === undefined || value === null) {\n    return \"\";\n  }\n\n  return String(value)\n    .toLowerCase()\n    .normalize(\"NFKC\")\n    .replace(/[^\\p{L}\\p{N}\\s]/gu, \" \")\n    .replace(/\\s+/g, \" \")\n    .trim();\n}\n\nfunction number(value) {\n  if (value === null || value === undefined || value === \"\") {\n    return null;\n  }\n\n  const n = Number(value);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction similarity(a, b) {\n  const first = clean(a);\n  const second = clean(b);\n\n  if (!first || !second) return 0;\n  if (first === second) return 1;\n\n  const wordsA = new Set(first.split(\" \"));\n  const wordsB = new Set(second.split(\" \"));\n\n  const intersection = [...wordsA]\n    .filter(word => wordsB.has(word)).length;\n\n  const union = new Set([...wordsA, ...wordsB]).size;\n\n  return union ? intersection / union : 0;\n}\n\n// 4. Extract results from SerpApi\nlet results = [];\n\nif (Array.isArray(response.local_results)) {\n  results = response.local_results;\n} else if (response.place_results) {\n  results = [response.place_results];\n} else if (response.title) {\n  results = [response];\n}\n\n// 5. Original business details\nconst originalName =\n  original.business_name ||\n  original.place_name ||\n  \"\";\n\nconst originalAddress = original.address || \"\";\n\nconst originalPlaceId = original.place_id || \"\";\n\nconst originalType =\n  original.business_type ||\n  \"\";\n\nconst researchContext = original.research_context || {};\n\n// 6. Validate each search result\nconst candidates = results.map(result => {\n\n  const nameScore = similarity(\n    originalName,\n    result.title\n  );\n\n  const addressScore = similarity(\n    originalAddress,\n    result.address\n  );\n\n  const categoryScore = similarity(\n    originalType,\n    result.type\n  );\n\n  const idMatch = Boolean(\n    originalPlaceId &&\n    result.place_id &&\n    String(originalPlaceId) === String(result.place_id)\n  );\n\n  // Weighted matching score\n  let score =\n    nameScore * 0.65 +\n    addressScore * 0.25 +\n    categoryScore * 0.10;\n\n  // Exact Place ID is strong evidence\n  if (idMatch) {\n    score = 1;\n  }\n\n  return {\n    result,\n    score,\n    nameScore,\n    addressScore,\n    categoryScore,\n    idMatch\n  };\n});\n\n// 7. Find the strongest matching business\ncandidates.sort((a, b) => b.score - a.score);\n\nconst best = candidates[0] || null;\n\n// 8. Classification\nlet status = \"invalid\";\nlet reason = \"No matching business found\";\n\nif (best) {\n  if (best.idMatch) {\n    status = \"valid\";\n    reason = \"Exact Place ID match\";\n  } else if (\n    best.nameScore >= 0.75 &&\n    best.score >= 0.60\n  ) {\n    status = \"valid\";\n    reason = \"Strong name and supporting field match\";\n  } else if (best.score >= 0.35) {\n    status = \"needs_review\";\n    reason = \"Partial match; manual verification recommended\";\n  } else {\n    status = \"invalid\";\n    reason = \"Insufficient evidence of a business match\";\n  }\n}\n\n// 9. Extract the selected result\nconst place = best?.result || {};\n\n// 10. Return structured validation result\nreturn {\n  json: {\n\n    research_context: researchContext,\n\n    original_business: {\n      business_name: originalName,\n      business_type: originalType,\n      address: originalAddress,\n      place_id: originalPlaceId,\n      google_overall_rating:\n        original.google_overall_rating ?? null,\n      google_total_review_count:\n        original.google_total_review_count ?? null,\n      customer_reviews:\n        original.customer_reviews || []\n    },\n\n    validation: {\n      status: status,\n      is_valid: status === \"valid\",\n      reason: reason,\n\n      confidence_score: best\n        ? Number(best.score.toFixed(3))\n        : 0,\n\n      name_similarity: best\n        ? Number(best.nameScore.toFixed(3))\n        : 0,\n\n      address_similarity: best\n        ? Number(best.addressScore.toFixed(3))\n        : 0,\n\n      category_similarity: best\n        ? Number(best.categoryScore.toFixed(3))\n        : 0,\n\n      place_id_match: best?.idMatch || false,\n\n      candidates_checked: results.length\n    },\n\n    classification: {\n      original_category: originalType,\n      serpapi_category: place.type || null,\n      serpapi_types: Array.isArray(place.types)\n        ? place.types\n        : []\n    },\n\n    // Verified/enriched SerpApi information\n    serpapi_result: {\n\n      business_name: place.title || null,\n\n      business_type: place.type || null,\n\n      address: place.address || null,\n\n      rating: number(place.rating),\n\n      reviews_count: number(place.reviews),\n\n      phone: place.phone || null,\n\n      website: place.website || null,\n\n      place_id: place.place_id || null,\n\n      data_id: place.data_id || null,\n\n      reviews_link: place.reviews_link || null,\n\n      google_maps_url:\n        place.place_id_search || null,\n\n      gps_coordinates:\n        place.gps_coordinates || null\n    },\n\n    data_source: {\n      original: \"Apify Google Maps Scraper\",\n      validation: \"SerpApi Google Maps\"\n    }\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        192
+      ],
+      "id": "7860a722-7fbc-4da1-9b42-43edc2d4575e",
+      "name": "Looping Sturcter"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.ai_input }}",
+        "options": {
+          "systemMessage": "You are a professional market research analyst.\n\nAnalyze the supplied business and customer review data.\n\nProduce a professional, evidence-based market research report.\n\nReport structure:\n\n1. Executive Summary\n2. Research Scope and Data Quality\n3. Market and Industry Overview\n4. Competitor Landscape\n5. Customer Review Analysis\n6. Business Strengths\n7. Business Weaknesses\n8. Market Opportunities\n9. Potential Risks\n10. SWOT Analysis\n11. Strategic Recommendations\n12. Final Conclusion\n13. Research Limitations\n\nIMPORTANT RULES:\n\n- Use only the supplied data for factual claims.\n- Do not invent businesses, reviews, statistics, or market shares.\n- Clearly separate facts from interpretations.\n- Identify insufficient evidence.\n- Compare competitors fairly.\n- Never treat sampled reviews as all customer reviews.\n- Adapt the analysis to the research topic and industry.\n- Keep the report professional and readable.\n- Target approximately 700-1000 words.\n- Use Markdown headings and bullet points.\n- Avoid wide Markdown tables.\n- Prefer a separate competitor profile for each business.\n- Provide actionable recommendations supported by evidence."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1488,
+        -96
+      ],
+      "id": "e58e21b0-d537-4066-8c0a-f91ec42c4de7",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        80
+      ],
+      "id": "79cad2db-544c-4e0e-b1d8-e6fa2e07604e",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "7VoXMwTiGrHgcCC4",
+          "name": "Groq account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "markdownToHtml",
+        "markdown": "={{ $json.output }}",
+        "options": {
+          "tables": true
+        }
+      },
+      "type": "n8n-nodes-base.markdown",
+      "typeVersion": 1,
+      "position": [
+        1824,
+        -96
+      ],
+      "id": "b71ae770-b14c-4baa-98a6-99cb4583fa4d",
+      "name": "Markdown"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/**\n * Professional Market Research Email Formatter\n * n8n Code Node\n * Input: Markdown node output\n * Output: email_subject, html_email\n */\n\nconst input = $input.first().json;\n\n// Get HTML from Markdown node\nconst reportHtml = String(\n  input.data ||\n  input.report_html ||\n  input.html ||\n  \"\"\n).trim();\n\n// Get Markdown content as fallback\nconst reportMarkdown = String(\n  input.output ||\n  \"\"\n).trim();\n\n// Get form information\nconst form = $(\"Edit Fields\").first().json;\n\nconst topic = String(\n  form[\"Research Topic\"] || \"Market Research\"\n);\n\nconst category = String(\n  form[\"Catagory\"] ||\n  form[\"Category\"] ||\n  \"Business Research\"\n);\n\nconst countryCode = String(\n  form[\"What is your Country\"] || \"BD\"\n);\n\nconst country =\n  countryCode.toLowerCase() === \"bd\"\n    ? \"Bangladesh\"\n    : countryCode;\n\n// Escape text for safe HTML insertion\nfunction escapeHtml(value) {\n  return String(value)\n    .replace(/&/g, \"&amp;\")\n    .replace(/</g, \"&lt;\")\n    .replace(/>/g, \"&gt;\")\n    .replace(/\"/g, \"&quot;\")\n    .replace(/'/g, \"&#39;\");\n}\n\n// Basic Markdown fallback\nfunction markdownToHtml(markdown) {\n  return escapeHtml(markdown)\n    .replace(/^### (.+)$/gm, \"<h3>$1</h3>\")\n    .replace(/^## (.+)$/gm, \"<h2>$1</h2>\")\n    .replace(/^# (.+)$/gm, \"<h1>$1</h1>\")\n    .replace(/\\*\\*(.+?)\\*\\*/g, \"<strong>$1</strong>\")\n    .replace(/\\n\\n/g, \"</p><p>\")\n    .replace(/\\n/g, \"<br>\");\n}\n\nlet content = reportHtml;\n\nif (!content && reportMarkdown) {\n  content = \"<p>\" + markdownToHtml(reportMarkdown) + \"</p>\";\n}\n\nif (!content) {\n  content = \"<p>No market research report was generated.</p>\";\n}\n\n// Email subject\nconst emailSubject =\n  `Market Research Report | ${topic} | ${country}`;\n\n// HTML email layout\nconst htmlEmail = `\n<!DOCTYPE html>\n<html>\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\"\n        content=\"width=device-width, initial-scale=1.0\">\n  <title>${escapeHtml(emailSubject)}</title>\n</head>\n\n<body style=\"\n  margin:0;\n  padding:0;\n  background-color:#f3f6fa;\n  font-family:Arial,Helvetica,sans-serif;\n  color:#243247;\n\">\n\n<table role=\"presentation\"\n       cellpadding=\"0\"\n       cellspacing=\"0\"\n       border=\"0\"\n       width=\"100%\"\n       style=\"background-color:#f3f6fa;\">\n\n<tr>\n<td align=\"center\"\n    style=\"padding:28px 12px;\">\n\n<table role=\"presentation\"\n       cellpadding=\"0\"\n       cellspacing=\"0\"\n       border=\"0\"\n       width=\"100%\"\n       style=\"\n         max-width:700px;\n         background:#ffffff;\n         border:1px solid #e3e8ef;\n         border-radius:12px;\n       \">\n\n<!-- HEADER -->\n<tr>\n<td style=\"\n  background-color:#142b49;\n  padding:32px 28px;\n  color:#ffffff;\n\">\n\n<p style=\"\n  margin:0 0 10px;\n  font-size:12px;\n  font-weight:bold;\n  letter-spacing:2px;\n  color:#9ecbff;\n\">\nMARKET INTELLIGENCE REPORT\n</p>\n\n<h1 style=\"\n  margin:0;\n  font-size:26px;\n  line-height:1.35;\n  color:#ffffff;\n\">\n${escapeHtml(topic)}\n</h1>\n\n<p style=\"\n  margin:14px 0 0;\n  font-size:14px;\n  line-height:1.6;\n  color:#dce8f7;\n\">\nProfessional Business Research &amp; Competitive Analysis\n</p>\n\n</td>\n</tr>\n\n<!-- RESEARCH DETAILS -->\n<tr>\n<td style=\"\n  padding:24px 28px;\n  border-bottom:1px solid #e7ebf0;\n\">\n\n<h2 style=\"\n  margin:0 0 15px;\n  font-size:17px;\n  color:#142b49;\n\">\nResearch Overview\n</h2>\n\n<p style=\"margin:7px 0;font-size:14px;\">\n<strong>Research Topic:</strong>\n${escapeHtml(topic)}\n</p>\n\n<p style=\"margin:7px 0;font-size:14px;\">\n<strong>Industry:</strong>\n${escapeHtml(category)}\n</p>\n\n<p style=\"margin:7px 0;font-size:14px;\">\n<strong>Country:</strong>\n${escapeHtml(country)}\n</p>\n\n<p style=\"margin:7px 0;font-size:14px;\">\n<strong>Prepared On:</strong>\n${new Date().toLocaleDateString(\"en-GB\", {\n  timeZone: \"Asia/Dhaka\",\n  day: \"2-digit\",\n  month: \"long\",\n  year: \"numeric\"\n})}\n</p>\n\n</td>\n</tr>\n\n<!-- MAIN REPORT -->\n<tr>\n<td style=\"\n  padding:28px;\n  font-size:14px;\n  line-height:1.8;\n  color:#243247;\n  overflow-wrap:break-word;\n  word-break:break-word;\n\">\n\n<style>\n  .report-content h1,\n  .report-content h2,\n  .report-content h3 {\n    color:#142b49;\n    line-height:1.4;\n  }\n\n  .report-content h2 {\n    font-size:19px;\n    margin-top:28px;\n    padding-bottom:8px;\n    border-bottom:1px solid #e7ebf0;\n  }\n\n  .report-content h3 {\n    font-size:16px;\n    margin-top:22px;\n  }\n\n  .report-content p,\n  .report-content li {\n    font-size:14px;\n    line-height:1.8;\n  }\n\n  .report-content table {\n    width:100%;\n    border-collapse:collapse;\n    font-size:13px;\n  }\n\n  .report-content th,\n  .report-content td {\n    padding:9px;\n    border:1px solid #dfe5ec;\n    text-align:left;\n    vertical-align:top;\n  }\n\n  .report-content th {\n    background:#edf3fa;\n  }\n\n  .report-content a {\n    color:#1768b3;\n  }\n</style>\n\n<div class=\"report-content\">\n${content}\n</div>\n\n</td>\n</tr>\n\n<!-- FOOTER -->\n<tr>\n<td style=\"\n  padding:22px 28px;\n  background-color:#f8fafc;\n  border-top:1px solid #e3e8ef;\n\">\n\n<p style=\"\n  margin:0 0 8px;\n  font-size:12px;\n  color:#526172;\n\">\n<strong>Research Methodology</strong>\n</p>\n\n<p style=\"\n  margin:0;\n  font-size:12px;\n  line-height:1.7;\n  color:#697789;\n\">\nThis report is generated from available Google Maps\nbusiness information and AI-assisted analysis.\nRatings, reviews and business information may change.\nAI interpretations should be reviewed before making\nimportant business decisions.\n</p>\n\n<p style=\"\n  margin:18px 0 0;\n  font-size:11px;\n  color:#8995a4;\n\">\nAutomated Market Research Report\n</p>\n\n</td>\n</tr>\n\n</table>\n</td>\n</tr>\n</table>\n\n</body>\n</html>\n`;\n\n// Return data to Gmail\nreturn [\n  {\n    json: {\n      email_subject: emailSubject,\n      html_email: htmlEmail,\n      research_topic: topic,\n      industry: category,\n      country: country,\n      status: \"Ready to send\",\n      generated_at: new Date().toISOString()\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2048,
+        -96
+      ],
+      "id": "b9b0a368-8f1d-484d-bfbc-5c345e50cd56",
+      "name": "Professional Email Formatter"
+    },
+    {
+      "parameters": {
+        "sendTo": "adilahmedmeraj120@gmail.com",
+        "subject": "={{ $json.email_subject }}",
+        "message": "={{ $json.html_email }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2256,
+        -96
+      ],
+      "id": "9868f05c-c9e3-4051-a769-cb9e57635d6f",
+      "name": "Send a message",
+      "webhookId": "3674e9c9-f587-4eb7-b1f6-f4fbb389a34a",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "UBxKFiTuSUEgIO9Z",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "google_maps",
+        "q": "=Research Topic :{{ $json['Research Topic'] }}\nCatagory: {{ $json.Catagory }}\n",
+        "additionalFields": {},
+        "requestOptions": {}
+      },
+      "type": "n8n-nodes-serpapi.serpApi",
+      "typeVersion": 1,
+      "position": [
+        416,
+        0
+      ],
+      "id": "695f5b49-d884-4ff8-8dbf-2bd902885d13",
+      "name": "Google_maps search",
+      "credentials": {
+        "serpApi": {
+          "id": "LoxMYOqJLq3W8ayI",
+          "name": "SerpApi account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Google_maps search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rearrange data": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Looping Sturcter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Looping Sturcter": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Markdown": {
+      "main": [
+        [
+          {
+            "node": "Professional Email Formatter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Professional Email Formatter": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google_maps search": {
+      "main": [
+        [
+          {
+            "node": "Rearrange data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "d323eb9e-cb6a-4ea7-8bb3-5de3b0622867",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8016af70e2772351af8e46a43445b221929918fc07cf4586ff34bf50bc27e012"
+  },
+  "nodeGroups": [],
+  "id": "YAldYrgvCNdfnxyt",
+  "tags": []
+}
